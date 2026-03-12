@@ -3,126 +3,140 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import pandas as pd
 from datetime import datetime
+from fpdf import FPDF
 import io
 
-# Configuración
-st.set_page_config(page_title="TruckLoad Optimizer Ultra", layout="wide")
+st.set_page_config(page_title="TruckLoad Ultra Optimizer", layout="wide")
 
-# --- LÓGICA DE OPTIMIZACIÓN AVANZADA ---
-def optimizar_espacio_maximo(ancho_c, largo_c, lista_pedidos):
-    # Ordenar por área (más grandes primero)
-    lista_pedidos.sort(key=lambda x: x['w'] * x['h'], reverse=True)
+# --- LÓGICA DE OPTIMIZACIÓN (GUILLOTINE BEST-FIT) ---
+def optimizar_carga_total(ancho_c, largo_c, items):
+    # Ordenar por área para meter lo más difícil primero
+    items.sort(key=lambda x: x['w'] * x['h'], reverse=True)
     
     cargados = []
-    no_cargados = []
-    # Lista de espacios vacíos (empezamos con el camión completo)
+    sobrantes = []
+    # Lista de rectángulos vacíos disponibles
     espacios_libres = [{'x': 0, 'y': 0, 'w': ancho_c, 'h': largo_c}]
 
-    for item in lista_pedidos:
-        colocado = False
-        # Intentar en cada espacio libre disponible
+    for item in items:
+        mejor_espacio_idx = -1
+        mejor_orientacion = None # (w, h)
+        min_desperdicio = float('inf')
+
+        # Buscar el mejor lugar entre todos los huecos disponibles
         for i, espacio in enumerate(espacios_libres):
-            w, h = item['w'], item['h']
+            for w_p, h_p in [(item['w'], item['h']), (item['h'], item['w'])]:
+                if w_p <= espacio['w'] and h_p <= espacio['h']:
+                    desperdicio = (espacio['w'] * espacio['h']) - (w_p * h_p)
+                    if desperdicio < min_desperdicio:
+                        min_desperdicio = desperdicio
+                        mejor_espacio_idx = i
+                        mejor_orientacion = (w_p, h_p)
+
+        if mejor_espacio_idx != -1:
+            espacio = espacios_libres.pop(mejor_espacio_idx)
+            w_final, h_final = mejor_orientacion
             
-            # Probar orientación normal y rotada
-            for ancho, largo in [(w, h), (h, w)]:
-                if ancho <= espacio['w'] and largo <= espacio['h']:
-                    # ¡Cabe! Lo posicionamos
-                    nuevo_bulto = {
-                        'x': espacio['x'], 'y': espacio['y'],
-                        'w': ancho, 'h': largo,
-                        'n': item['nombre'], 'c': item['color']
-                    }
-                    cargados.append(nuevo_bulto)
-                    
-                    # Dividir el espacio restante en dos nuevos espacios libres (Guillotine Split)
-                    # Espacio a la derecha
-                    if espacio['w'] - ancho > 0:
-                        espacios_libres.append({
-                            'x': espacio['x'] + ancho, 'y': espacio['y'],
-                            'w': espacio['w'] - ancho, 'h': largo
-                        })
-                    # Espacio arriba
-                    if espacio['h'] - largo > 0:
-                        espacios_libres.append({
-                            'x': espacio['x'], 'y': espacio['y'] + largo,
-                            'w': espacio['w'], 'h': espacio['h'] - largo
-                        })
-                    
-                    espacios_libres.pop(i)
-                    colocado = True
-                    break
-            if colocado: break
-        
-        if not colocado:
-            no_cargados.append(item)
+            # Ubicar bulto
+            cargados.append({
+                'x': espacio['x'], 'y': espacio['y'],
+                'w': w_final, 'h': h_final,
+                'n': item['nombre'], 'c': item['color']
+            })
+
+            # Dividir el espacio sobrante en dos nuevos rectángulos (Guillotina)
+            # Decidimos dividir por el lado que deje el rectángulo más grande útil
+            if (espacio['w'] - w_final) > (espacio['h'] - h_final):
+                # Dividir verticalmente
+                if espacio['w'] - w_final > 0:
+                    espacios_libres.append({'x': espacio['x'] + w_final, 'y': espacio['y'], 'w': espacio['w'] - w_final, 'h': h_final})
+                if espacio['h'] - h_final > 0:
+                    espacios_libres.append({'x': espacio['x'], 'y': espacio['y'] + h_final, 'w': espacio['w'], 'h': espacio['h'] - h_final})
+            else:
+                # Dividir horizontalmente
+                if espacio['h'] - h_final > 0:
+                    espacios_libres.append({'x': espacio['x'], 'y': espacio['y'] + h_final, 'w': w_final, 'h': espacio['h'] - h_final})
+                if espacio['w'] - w_final > 0:
+                    espacios_libres.append({'x': espacio['x'] + w_final, 'y': espacio['y'], 'w': espacio['w'] - w_final, 'h': espacio['h']})
+        else:
+            sobrantes.append(item)
             
-    return cargados, no_cargados
+    return cargados, sobrantes
 
 # --- INTERFAZ ---
-if 'productos' not in st.session_state: st.session_state.productos = {}
+if 'productos_db' not in st.session_state: st.session_state.productos_db = {}
+if 'historial_db' not in st.session_state: st.session_state.historial_db = []
 
-st.title("🚀 Optimizador de Carga Máxima")
+st.title("🚛 TruckLoad Ultra Optimizer")
 
-col_cfg, col_vis = st.columns([1, 2])
+tab1, tab2 = st.tabs(["🚀 Nuevo Plan", "📜 Historial"])
 
-with col_cfg:
-    nombre_plan = st.text_input("📦 Nombre del Plan / Cliente (Obligatorio)")
-    ancho_t = st.number_input("Ancho Camión (cm)", min_value=1, value=240)
-    largo_t = st.number_input("Largo Camión (cm)", min_value=1, value=1200)
+with tab1:
+    col_config, col_main = st.columns([1, 2])
     
-    st.divider()
-    with st.expander("Añadir Modelos de Heladeras"):
-        with st.form("nuevo_p"):
-            n = st.text_input("Nombre Modelo")
-            a = st.number_input("Ancho (cm)", min_value=1, value=70)
-            p = st.number_input("Profundidad (cm)", min_value=1, value=80)
-            c = st.color_picker("Color", "#3498db")
-            if st.form_submit_button("Registrar") and n:
-                st.session_state.productos[n] = {'w': a, 'h': p, 'color': c}
-                st.rerun()
+    with col_config:
+        st.subheader("1. Información del Plan")
+        nombre_plan = st.text_input("Nombre del Cliente / Pedido")
+        fecha_str = datetime.now().strftime("%d/%m/%Y")
+        
+        st.divider()
+        st.subheader("2. El Vehículo")
+        ancho_t = st.number_input("Ancho Camión (cm)", min_value=1, value=240)
+        largo_t = st.number_input("Largo Camión (cm)", min_value=1, value=1200)
 
-    carga_solicitada = []
-    if st.session_state.productos:
-        st.write("**Cantidades a cargar:**")
-        for n, d in st.session_state.productos.items():
-            cant = st.number_input(f"{n} ({d['w']}x{d['h']})", min_value=0, key=f"q_{n}")
+        st.divider()
+        st.subheader("3. Carga")
+        with st.expander("Añadir nuevo modelo"):
+            with st.form("new_product", clear_on_submit=True):
+                n = st.text_input("Nombre")
+                a = st.number_input("Ancho (cm)", min_value=1, value=70)
+                p = st.number_input("Profundidad (cm)", min_value=1, value=80)
+                c = st.color_picker("Color", "#3498db")
+                if st.form_submit_button("Guardar"):
+                    if n: st.session_state.productos_db[n] = {'w': a, 'h': p, 'c': c}
+                    st.rerun()
+
+        lista_final = []
+        for nombre, datos in st.session_state.productos_db.items():
+            cant = st.number_input(f"Cant. {nombre}", min_value=0, key=f"q_{nombre}")
             for _ in range(cant):
-                carga_solicitada.append({'nombre': n, 'w': d['w'], 'h': d['h'], 'color': d['color']})
+                lista_final.append({'nombre': nombre, 'w': datos['w'], 'h': datos['h'], 'color': datos['c']})
 
-with col_vis:
-    if st.button("CALCULAR APROVECHAMIENTO MÁXIMO", type="primary", use_container_width=True):
-        if not nombre_plan:
-            st.error("⚠️ Error: El Plan debe tener un nombre.")
-        elif not carga_solicitada:
-            st.warning("⚠️ No hay bultos seleccionados.")
-        else:
-            cargados, sobrantes = optimizar_espacio_maximo(ancho_t, largo_t, carga_solicitada)
-            
-            # Gráfico
-            fig, ax = plt.subplots(figsize=(10, 8))
-            ax.add_patch(patches.Rectangle((0,0), ancho_t, largo_t, color="#f1f3f6", ec="black", lw=2))
-            plt.title(f"CLIENTE: {nombre_plan} | {datetime.now().strftime('%d/%m/%Y')}", fontsize=12)
-            
-            for b in cargados:
-                ax.add_patch(patches.Rectangle((b['x'], b['y']), b['w'], b['h'], fc=b['c'], ec="white", lw=0.5))
-                ax.text(b['x']+b['w']/2, b['y']+b['h']/2, b['n'], ha='center', va='center', fontsize=5, rotation=90, color="white")
-
-            plt.xlim(-50, ancho_t+50); plt.ylim(-50, largo_t+100); ax.set_aspect('equal'); plt.axis('off')
-            st.pyplot(fig)
-            
-            # Reporte de Eficiencia
-            area_utilizada = sum(b['w']*b['h'] for b in cargados)
-            eficiencia = (area_utilizada / (ancho_t * largo_t)) * 100
-            
-            c1, c2 = st.columns(2)
-            c1.metric("Espacio Utilizado", f"{eficiencia:.1f}%")
-            c2.metric("Bultos Cargados", len(cargados))
-            
-            if sobrantes:
-                st.error(f"❌ ATENCIÓN: {len(sobrantes)} bultos quedaron fuera por falta de espacio.")
-                df_sobra = pd.DataFrame(sobrantes)['nombre'].value_counts()
-                st.write("Detalle de lo que NO entró:")
-                st.dataframe(df_sobra)
+    with col_main:
+        if st.button("GENERAR PLAN OPTIMIZADO", type="primary", use_container_width=True):
+            if not nombre_plan:
+                st.error("❌ ERROR: El nombre del plan es obligatorio.")
+            elif not lista_final:
+                st.warning("⚠️ No hay productos seleccionados.")
             else:
-                st.success("✅ ¡Perfecto! Toda la mercadería entró en el camión.")
+                cargados, sobrantes = optimizar_carga_total(ancho_t, largo_t, lista_final)
+                
+                # Gráfico
+                fig, ax = plt.subplots(figsize=(10, 8))
+                ax.add_patch(patches.Rectangle((0,0), ancho_t, largo_t, color="#f8f9fa", ec="black", lw=2))
+                plt.title(f"Plan: {nombre_plan} | Fecha: {fecha_str}", fontsize=14, pad=15)
+                
+                for b in cargados:
+                    ax.add_patch(patches.Rectangle((b['x'], b['y']), b['w'], b['h'], fc=b['c'], ec="white", lw=0.5))
+                    ax.text(b['x']+b['w']/2, b['y']+b['h']/2, b['n'], ha='center', va='center', fontsize=6, rotation=90, color="white", weight='bold')
+
+                plt.xlim(-50, ancho_t+50); plt.ylim(-50, largo_t+100); ax.set_aspect('equal'); plt.axis('off')
+                st.pyplot(fig)
+                
+                # Eficiencia
+                area_u = sum(b['w']*b['h'] for b in cargados)
+                eficiencia = (area_u / (ancho_t * largo_t)) * 100
+                st.metric("Aprovechamiento de Piso", f"{eficiencia:.1f}%")
+
+                if sobrantes:
+                    st.error(f"⚠️ NO ENTRARON: {len(sobrantes)} bultos.")
+                    st.write(pd.DataFrame(sobrantes)['nombre'].value_counts())
+                
+                # Guardar Historial
+                st.session_state.historial_db.append({"Fecha": fecha_str, "Plan": nombre_plan, "Eficiencia": f"{eficiencia:.1f}%"})
+
+with tab2:
+    if st.session_state.historial_db:
+        st.table(pd.DataFrame(st.session_state.historial_db))
+    else:
+        st.info("Historial vacío.")
