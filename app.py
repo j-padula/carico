@@ -2,168 +2,127 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import pandas as pd
-from fpdf import FPDF
 from datetime import datetime
 import io
 
-# Configuración de la App
-st.set_page_config(page_title="TruckLoad Pro - Multi-Usuario", layout="wide")
+# Configuración
+st.set_page_config(page_title="TruckLoad Optimizer Ultra", layout="wide")
 
-# --- SISTEMA DE AUTENTICACIÓN Y BASE DE DATOS MOCK ---
-# En una webapp real usaríamos una base de datos. 
-# Aquí usamos la memoria de Streamlit para separar las sesiones.
-if 'db_usuarios' not in st.session_state:
-    st.session_state.db_usuarios = {} # {usuario: {password: x, productos: {}, historial: []}}
-if 'usuario_actual' not in st.session_state:
-    st.session_state.usuario_actual = None
-
-# --- FUNCIONES DE LÓGICA ---
-def calcular_layout(ancho_c, largo_c, items):
-    items.sort(key=lambda x: x['w'] * x['h'], reverse=True)
-    posiciones, x, y, max_h_fila = [], 0, 0, 0
-    for item in items:
-        w, h = item['w'], item['h']
-        if x + w > ancho_c and x + h <= ancho_c: w, h = h, w
-        if x + w <= ancho_c:
-            if y + h <= largo_c:
-                posiciones.append({'x': x, 'y': y, 'w': w, 'h': h, 'n': item['nombre'], 'c': item['color']})
-                x += w
-                max_h_fila = max(max_h_fila, h)
-        else:
-            x = 0
-            y += max_h_fila
-            max_h_fila = h
-            if y + h <= largo_c:
-                posiciones.append({'x': x, 'y': y, 'w': w, 'h': h, 'n': item['nombre'], 'c': item['color']})
-                x += w
-    return posiciones
-
-# --- PANTALLA DE LOGIN / REGISTRO ---
-if st.session_state.usuario_actual is None:
-    st.title("🔐 Acceso al Sistema de Carga")
-    menu = ["Ingresar", "Registrarse"]
-    choice = st.sidebar.selectbox("Menú de Acceso", menu)
-
-    if choice == "Registrarse":
-        st.subheader("Crear nueva cuenta")
-        new_user = st.text_input("Usuario")
-        new_pass = st.text_input("Contraseña", type='password')
-        if st.button("Crear Usuario"):
-            if new_user in st.session_state.db_usuarios:
-                st.error("El usuario ya existe.")
-            elif new_user == "":
-                st.error("El nombre no puede estar vacío.")
-            else:
-                st.session_state.db_usuarios[new_user] = {'pass': new_pass, 'productos': {}, 'historial': []}
-                st.success("Cuenta creada. Ahora podés ingresar.")
+# --- LÓGICA DE OPTIMIZACIÓN AVANZADA ---
+def optimizar_espacio_maximo(ancho_c, largo_c, lista_pedidos):
+    # Ordenar por área (más grandes primero)
+    lista_pedidos.sort(key=lambda x: x['w'] * x['h'], reverse=True)
     
-    else:
-        st.subheader("Iniciar Sesión")
-        user = st.text_input("Usuario")
-        password = st.text_input("Contraseña", type='password')
-        if st.button("Entrar"):
-            if user in st.session_state.db_usuarios and st.session_state.db_usuarios[user]['pass'] == password:
-                st.session_state.usuario_actual = user
-                st.rerun()
-            else:
-                st.error("Usuario o contraseña incorrectos.")
-    st.stop() # Detiene la ejecución aquí si no está logueado
+    cargados = []
+    no_cargados = []
+    # Lista de espacios vacíos (empezamos con el camión completo)
+    espacios_libres = [{'x': 0, 'y': 0, 'w': ancho_c, 'h': largo_c}]
 
-# --- SI LLEGAMOS ACÁ, EL USUARIO ESTÁ LOGUEADO ---
-user_data = st.session_state.db_usuarios[st.session_state.usuario_actual]
-
-with st.sidebar:
-    st.write(f"👤 Usuario: **{st.session_state.usuario_actual}**")
-    if st.button("Cerrar Sesión"):
-        st.session_state.usuario_actual = None
-        st.rerun()
-
-st.title(f"🚛 Panel de Gestión - {st.session_state.usuario_actual}")
-
-tab1, tab2 = st.tabs(["🚀 Nuevo Plan de Carga", "📜 Mis Historiales"])
-
-with tab1:
-    col_in, col_viz = st.columns([1, 2])
-    
-    with col_in:
-        st.subheader("1. Identificación del Plan")
-        # --- REQUISITO: NOMBRE DEL PLAN ---
-        nombre_plan = st.text_input("Nombre del Cliente / Pedido (Obligatorio)", placeholder="Ej: Pedido Juan Pérez")
-        fecha_actual = datetime.now().strftime("%d/%m/%Y")
-        st.info(f"Fecha de hoy: {fecha_actual}")
-
-        st.divider()
-        st.subheader("2. Medidas del Camión")
-        ancho_c = st.number_input("Ancho Camión (cm)", min_value=1, value=240)
-        largo_c = st.number_input("Largo Camión (cm)", min_value=1, value=1200)
+    for item in lista_pedidos:
+        colocado = False
+        # Intentar en cada espacio libre disponible
+        for i, espacio in enumerate(espacios_libres):
+            w, h = item['w'], item['h']
+            
+            # Probar orientación normal y rotada
+            for ancho, largo in [(w, h), (h, w)]:
+                if ancho <= espacio['w'] and largo <= espacio['h']:
+                    # ¡Cabe! Lo posicionamos
+                    nuevo_bulto = {
+                        'x': espacio['x'], 'y': espacio['y'],
+                        'w': ancho, 'h': largo,
+                        'n': item['nombre'], 'c': item['color']
+                    }
+                    cargados.append(nuevo_bulto)
+                    
+                    # Dividir el espacio restante en dos nuevos espacios libres (Guillotine Split)
+                    # Espacio a la derecha
+                    if espacio['w'] - ancho > 0:
+                        espacios_libres.append({
+                            'x': espacio['x'] + ancho, 'y': espacio['y'],
+                            'w': espacio['w'] - ancho, 'h': largo
+                        })
+                    # Espacio arriba
+                    if espacio['h'] - largo > 0:
+                        espacios_libres.append({
+                            'x': espacio['x'], 'y': espacio['y'] + largo,
+                            'w': espacio['w'], 'h': espacio['h'] - largo
+                        })
+                    
+                    espacios_libres.pop(i)
+                    colocado = True
+                    break
+            if colocado: break
         
-        st.divider()
-        st.subheader("3. Mis Productos")
-        with st.form("nuevo_p", clear_on_submit=True):
-            nom_p = st.text_input("Nombre del Producto")
-            # --- REQUISITO: SIN LÍMITE DE 70/80 ---
-            an_p = st.number_input("Ancho (cm)", min_value=1, value=10)
-            pr_p = st.number_input("Profundidad (cm)", min_value=1, value=10)
-            cl_p = st.color_picker("Color", "#3498db")
-            if st.form_submit_button("Guardar Producto") and nom_p:
-                user_data['productos'][nom_p] = {'w': an_p, 'h': pr_p, 'color': cl_p}
+        if not colocado:
+            no_cargados.append(item)
+            
+    return cargados, no_cargados
+
+# --- INTERFAZ ---
+if 'productos' not in st.session_state: st.session_state.productos = {}
+
+st.title("🚀 Optimizador de Carga Máxima")
+
+col_cfg, col_vis = st.columns([1, 2])
+
+with col_cfg:
+    nombre_plan = st.text_input("📦 Nombre del Plan / Cliente (Obligatorio)")
+    ancho_t = st.number_input("Ancho Camión (cm)", min_value=1, value=240)
+    largo_t = st.number_input("Largo Camión (cm)", min_value=1, value=1200)
+    
+    st.divider()
+    with st.expander("Añadir Modelos de Heladeras"):
+        with st.form("nuevo_p"):
+            n = st.text_input("Nombre Modelo")
+            a = st.number_input("Ancho (cm)", min_value=1, value=70)
+            p = st.number_input("Profundidad (cm)", min_value=1, value=80)
+            c = st.color_picker("Color", "#3498db")
+            if st.form_submit_button("Registrar") and n:
+                st.session_state.productos[n] = {'w': a, 'h': p, 'color': c}
                 st.rerun()
 
-        carga = []
-        if user_data['productos']:
-            st.write("**Seleccionar cantidades:**")
-            for n, d in user_data['productos'].items():
-                cant = st.number_input(f"{n} ({d['w']}x{d['h']})", min_value=0, key=f"c_{n}")
-                for _ in range(cant): carga.append({'nombre': n, 'w': d['w'], 'h': d['h'], 'color': d['color']})
+    carga_solicitada = []
+    if st.session_state.productos:
+        st.write("**Cantidades a cargar:**")
+        for n, d in st.session_state.productos.items():
+            cant = st.number_input(f"{n} ({d['w']}x{d['h']})", min_value=0, key=f"q_{n}")
+            for _ in range(cant):
+                carga_solicitada.append({'nombre': n, 'w': d['w'], 'h': d['h'], 'color': d['color']})
+
+with col_vis:
+    if st.button("CALCULAR APROVECHAMIENTO MÁXIMO", type="primary", use_container_width=True):
+        if not nombre_plan:
+            st.error("⚠️ Error: El Plan debe tener un nombre.")
+        elif not carga_solicitada:
+            st.warning("⚠️ No hay bultos seleccionados.")
         else:
-            st.warning("No tenés productos guardados todavía.")
+            cargados, sobrantes = optimizar_espacio_maximo(ancho_t, largo_t, carga_solicitada)
+            
+            # Gráfico
+            fig, ax = plt.subplots(figsize=(10, 8))
+            ax.add_patch(patches.Rectangle((0,0), ancho_t, largo_t, color="#f1f3f6", ec="black", lw=2))
+            plt.title(f"CLIENTE: {nombre_plan} | {datetime.now().strftime('%d/%m/%Y')}", fontsize=12)
+            
+            for b in cargados:
+                ax.add_patch(patches.Rectangle((b['x'], b['y']), b['w'], b['h'], fc=b['c'], ec="white", lw=0.5))
+                ax.text(b['x']+b['w']/2, b['y']+b['h']/2, b['n'], ha='center', va='center', fontsize=5, rotation=90, color="white")
 
-    with col_viz:
-        st.subheader("4. Resultado y Gráfico")
-        if st.button("GENERAR PLAN DE CARGA", type="primary", use_container_width=True):
-            # --- REQUISITO: VALIDAR NOMBRE ---
-            if not nombre_plan:
-                st.error("⚠️ ERROR: Debes ingresar un NOMBRE para el plan antes de continuar.")
-            elif not carga:
-                st.warning("⚠️ Seleccioná al menos un producto.")
+            plt.xlim(-50, ancho_t+50); plt.ylim(-50, largo_t+100); ax.set_aspect('equal'); plt.axis('off')
+            st.pyplot(fig)
+            
+            # Reporte de Eficiencia
+            area_utilizada = sum(b['w']*b['h'] for b in cargados)
+            eficiencia = (area_utilizada / (ancho_t * largo_t)) * 100
+            
+            c1, c2 = st.columns(2)
+            c1.metric("Espacio Utilizado", f"{eficiencia:.1f}%")
+            c2.metric("Bultos Cargados", len(cargados))
+            
+            if sobrantes:
+                st.error(f"❌ ATENCIÓN: {len(sobrantes)} bultos quedaron fuera por falta de espacio.")
+                df_sobra = pd.DataFrame(sobrantes)['nombre'].value_counts()
+                st.write("Detalle de lo que NO entró:")
+                st.dataframe(df_sobra)
             else:
-                res = calcular_layout(ancho_c, largo_c, carga)
-                
-                # --- GRÁFICO CON NOMBRE Y FECHA ---
-                fig, ax = plt.subplots(figsize=(10, 8))
-                ax.add_patch(patches.Rectangle((0,0), ancho_c, largo_c, color="#f1f3f6", ec="#2c3e50", lw=2))
-                
-                # Título de la imagen
-                plt.title(f"Plan: {nombre_plan}\nFecha: {fecha_actual}", fontsize=14, pad=20)
-                
-                for p in res:
-                    ax.add_patch(patches.Rectangle((p['x'], p['y']), p['w'], p['h'], fc=p['c'], ec="white", lw=0.5))
-                    ax.text(p['x']+p['w']/2, p['y']+p['h']/2, p['n'], ha='center', va='center', fontsize=6, rotation=90, color="white", weight='bold')
-                
-                plt.xlim(-50, ancho_c+50); plt.ylim(-50, largo_c+100); ax.set_aspect('equal'); plt.axis('off')
-                st.pyplot(fig)
-                
-                # Guardar en Historial del Usuario
-                user_data['historial'].append({
-                    "Fecha": fecha_actual,
-                    "Plan": nombre_plan,
-                    "Bultos": len(res)
-                })
-                
-                # Generar PDF
-                pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 16)
-                pdf.cell(190, 10, f"Plan: {nombre_plan}", 1, 1, 'C')
-                pdf.set_font("Arial", '', 12); pdf.cell(190, 10, f"Fecha: {fecha_actual}", 0, 1, 'C')
-                with io.BytesIO() as tmp:
-                    fig.savefig(tmp, format='png', bbox_inches='tight'); tmp.seek(0)
-                    with open("temp_p.png", "wb") as f: f.write(tmp.read())
-                    pdf.image("temp_p.png", x=10, y=40, w=180)
-                
-                st.download_button(f"📥 Descargar PDF {nombre_plan}", pdf.output(dest='S').encode('latin-1'), f"{nombre_plan}.pdf")
-
-with tab2:
-    st.subheader(f"Historial de {st.session_state.usuario_actual}")
-    if user_data['historial']:
-        st.table(pd.DataFrame(user_data['historial']))
-    else:
-        st.info("No tenés planes guardados.")
+                st.success("✅ ¡Perfecto! Toda la mercadería entró en el camión.")
